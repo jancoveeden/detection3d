@@ -1,0 +1,1 @@
+python C:\Users\OEM\nerf-gs-detect\NeRF_RPN\detection3d\nerf_rpn\scripts\render_heatmap.py --dataset_dir E:\NeRF_datasets\hypersim_ngp_format --feature_dir E:\NeRF_datasets\nerf_rpn\hypersim_rpn_data\features --proposal_dir E:\NeRF_datasets\nerf_rpn\hypersim_rpn_data\results\proposals --boxes_dir E:\NeRF_datasets\nerf_rpn\hypersim_rpn_data\obb --kernel_type box

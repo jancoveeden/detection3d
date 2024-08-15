@@ -20,7 +20,7 @@ from model.feature_extractor import VGG_FPN, SwinTransformer_FPN
 from model.detector import ProposalTargetLayer, ROIPool, RCNN, Classification_Model
 from model.utils import clip_boxes_to_mesh, remove_small_boxes, nms
 from datasets import RPNClassificationDataset
-from eval import evaluate_box_proposals_ap
+from utils.eval import evaluate_box_proposals_ap
 
 from tqdm import tqdm
 import wandb

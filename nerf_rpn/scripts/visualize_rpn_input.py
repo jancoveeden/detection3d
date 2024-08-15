@@ -1,22 +1,24 @@
+"""
+This script is adapted from https://github.com/lyclyc52/NeRF_RPN/blob/main/nerf_rpn/scripts/visualize_rpn_input.py
+
+output:
+Generates a point cloud (.ply) with/without bounding boxes
+"""
+
 import os
-import random
 import argparse
 import numpy as np
 import matplotlib.cm as cm
 from scipy.ndimage import zoom
-
 from functools import partial
 from tqdm.contrib.concurrent import process_map
-
 
 def density_to_alpha(density):
     return np.clip(1.0 - np.exp(-np.exp(density) / 100.0), 0.0, 1.0)
 
-
 def depth_nerf_density_to_alpha(density):
     activation = np.clip(density, a_min=0, a_max=None)  # original nerf uses relu
     return np.clip(1.0 - np.exp(-activation / 100.0), 0.0, 1.0)
-
 
 def construct_grid(res):
     res_x, res_y, res_z = res
@@ -157,29 +159,47 @@ def get_objectness_grid(data, res):
 
 
 def visualize_scene(scene_name, output_dir, feature_dir, box_dir=None, box_format='obb', 
-                    objectness_dir=None, alpha_threshold=0.01, transpose_yz=False):
+                    objectness_dir=None, alpha_threshold=0.01, transpose_yz=False, from_nerfstudio=True):
     boxes = None
     if box_dir is not None:
-        boxes = np.load(os.path.join(box_dir, scene_name + '.npy'), allow_pickle=True)
+        if (box_dir.endswith(".npy")):
+            box_dir = os.path.dirname(box_dir)
+        boxes = np.load(os.path.join(box_dir, scene_name + '.npy'), allow_pickle=True) 
     feature = np.load(os.path.join(feature_dir, scene_name + '.npz'), allow_pickle=True)
 
     res = feature['resolution']
     rgbsigma = feature['rgbsigma']
-    # if transpose_yz:
-    #     rgbsigma = rgbsigma.reshape((res[2], res[1], res[0], -1))
-    #     rgbsigma = np.transpose(rgbsigma, (1, 2, 0, 3))
-    #     rgbsigma = rgbsigma.reshape((res[0] * res[1] * res[2], -1))
-    #     res = res[[2, 0, 1]]
 
-    rgbsigma = np.transpose(rgbsigma, (2, 1, 0, 3)).reshape(-1, 4)
+    if (from_nerfstudio):
+        rgbsigma = rgbsigma.reshape(4, res[0], res[1], res[2]) # (4, W, L, H)
+        rgbsigma = np.transpose(rgbsigma, (0, 3, 2, 1))        #  (4, H, L, W)
 
+        rgb = rgbsigma[:3].reshape(3, -1).T
+        alpha = rgbsigma[3].flatten() 
+        alpha_threshold = 0.1
+    elif (transpose_yz):
+        rgbsigma = rgbsigma.reshape((res[2], res[1], res[0], -1))
+        rgbsigma = np.transpose(rgbsigma, (1, 2, 0, 3))
+        rgbsigma = rgbsigma.reshape((res[0] * res[1] * res[2], -1))
+        res = res[[2, 0, 1]]
+
+        rgb = rgbsigma[:, :3]
+        alpha = rgbsigma[:, -1]
+        alpha_threshold = 0.01
+    else:
+        rgbsigma = rgbsigma.reshape((res[0], res[1], res[2], -1))
+        rgbsigma = np.transpose(rgbsigma, (2, 1, 0, 3)).reshape(-1, 4)
+
+        rgb = rgbsigma[:, :3]
+        alpha = rgbsigma[:, -1]
+        alpha_threshold = 0.01
+        #alpha = depth_nerf_density_to_alpha(alpha)
+        #alpha = density_to_alpha(alpha)
+        #alpha = (alpha * 255).astype(np.uint8)
+    
+    print(f"Resolution: {res}")
     scene_box = np.concatenate((np.zeros(3), res))
     scale = 1. / res.max()
-
-    alpha = rgbsigma[:, -1]
-    # alpha = depth_nerf_density_to_alpha(alpha)
-    alpha = density_to_alpha(alpha)
-    # alpha = (alpha * 255).astype(np.uint8)
     num_grid_points = (alpha > alpha_threshold).sum()
 
     if objectness_dir is not None:
@@ -226,7 +246,7 @@ def visualize_scene(scene_name, output_dir, feature_dir, box_dir=None, box_forma
 
         if objectness_dir is None:
             # write_colormapped_alpha_grid_to_ply(f, alpha, grid, threshold=alpha_threshold)
-            write_rgb_to_ply(f, rgbsigma[:, :3], alpha, grid, threshold=alpha_threshold)
+            write_rgb_to_ply(f, rgb, alpha, grid, threshold=alpha_threshold)
         else:
             write_objectness_heatmap_to_ply(f, alpha, score, grid, threshold=alpha_threshold)
 
@@ -255,6 +275,8 @@ def parse_args():
                         help='Threshold for alpha.')
     parser.add_argument('--transpose_yz', '-tr', action='store_true',
                         help='Whether to transpose the y and z axes.')
+    parser.add_argument('--from_nerfstudio', '-fn', action='store_true',
+                        help='Whether nerfstudio was used or not')
 
     args = parser.parse_args()
     return args
@@ -263,17 +285,21 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    npz_files = os.listdir(args.feature_dir)
-    npy_files = os.listdir(args.box_dir) if args.box_dir is not None else None
+    if not (args.feature_dir.endswith(".npz")) and not (args.box_dir.endswith(".npy")):
+        npz_files = os.listdir(args.feature_dir)
+        npy_files = os.listdir(args.box_dir) if args.box_dir is not None else None
 
-    npz_files = [f for f in npz_files if f.endswith('.npz') and os.path.isfile(os.path.join(args.feature_dir, f))]
+        npz_files = [f for f in npz_files if f.endswith('.npz') and os.path.isfile(os.path.join(args.feature_dir, f))]
 
-    scenes = [f.split('.')[0] for f in npz_files]
+        scenes = [f.split('.')[0] for f in npz_files]
+    else:
+        scenes = [os.path.splitext(os.path.basename(args.feature_dir))[0]] 
+        args.feature_dir = os.path.dirname(args.feature_dir)
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     fn = partial(visualize_scene, output_dir=args.output_dir, feature_dir=args.feature_dir, box_dir=args.box_dir,
                  box_format=args.box_format, objectness_dir=args.objectness_dir, alpha_threshold=args.alpha_threshold,
-                 transpose_yz=args.transpose_yz)
+                 transpose_yz=args.transpose_yz, from_nerfstudio=args.from_nerfstudio)
     
     process_map(fn, scenes, max_workers=8)

@@ -13,7 +13,7 @@ import torch.multiprocessing as mp
 import wandb
 from datasets import (BaseDataset, Front3DRPNDataset, GeneralRPNDataset,
                       HypersimRPNDataset, ScanNetRPNDataset)
-from eval import evaluate_box_proposals_ap, evaluate_box_proposals_recall
+from utils.eval import evaluate_box_proposals_ap, evaluate_box_proposals_recall
 from model.anchor import AnchorGenerator3D, RPNHead
 from model.feature_extractor import (VGG_FPN, Bottleneck, ResNet_FPN_64,
                                      ResNet_FPN_256, ResNetSimplified_64,
@@ -70,7 +70,7 @@ def parse_args():
                         help='Whether to output per-voxel objectness scores during evaluation, by default output '
                              'to save_path/voxel_scores dir. Will output the maximum score among all anchors at '
                              'each voxel. It can be used to generate heatmap.' )
-    parser.add_argument('--filter', choices=['none', 'tp', 'fp'], default='none', 
+    parser.add_argument('--filter', choices=['None', 'tp', 'fp'], default='None', 
                         help='Filter the proposal output for visualization and debugging.')
     parser.add_argument('--filter_threshold', type=float, default=0.7,
                         help='The IoU threshold for the proposal filter, only used if --output_proposals is True '
@@ -139,12 +139,16 @@ def parse_args():
     parser.add_argument('--output_all', action='store_true',
                         help='Output proposals for train/val/test set in inference.')
 
+    # Nerfstudio add-ons
+    parser.add_argument('--from_nerfstudio', default=False, action='store_true', 
+                        help='Whether nerfstudio was used to extract the features or not.')
+
     args = parser.parse_args()
     return args
 
 
 class Trainer:
-    def __init__(self, args, rank=0, world_size=1, device_id=None, logger=None):
+    def __init__(self, args, rank=0, world_size=1, device_id=0, logger=None):
         self.args = args
         self.rank = rank
         self.world_size = world_size
@@ -182,7 +186,7 @@ class Trainer:
             self.logger.info(f'Loading checkpoint from {args.checkpoint}.')
             if args.load_backbone_only:
                 self.logger.info('Loading backbone only.')
-            checkpoint = torch.load(args.checkpoint)
+            checkpoint = torch.load(args.checkpoint, map_location='cuda:0')
 
             # print('Training args from checkpoint:')
             # print(checkpoint['train_args'])
@@ -258,14 +262,15 @@ class Trainer:
             if self.args.dataset_name in ['hypersim', 'front3d']:
                 self.test_set = self.dataset(scene_list=self.test_scenes, features_path=self.args.features_path, 
                                              boxes_path=self.args.boxes_path, normalize_density=self.args.normalize_density, 
-                                             preload=self.args.preload)
+                                             preload=self.args.preload, from_nerfstudio=self.args.from_nerfstudio)
 
             elif self.args.dataset_name == 'scannet':
                 self.test_set = ScanNetRPNDataset(scene_list=self.test_scenes, features_path=self.args.features_path, 
-                                                  boxes_path=self.args.boxes_path)
+                                                  boxes_path=self.args.boxes_path, from_nerfstudio=self.args.from_nerfstudio)
 
             elif self.args.dataset_name == 'general':
-                self.test_set = GeneralRPNDataset(csv_path=self.args.test_csv, normalize_density=self.args.normalize_density)
+                self.test_set = GeneralRPNDataset(csv_path=self.args.test_csv, normalize_density=self.args.normalize_density, 
+                                                  from_nerfstudio=self.args.from_nerfstudio)
 
             if self.rank == 0:
                 self.logger.info(f'Loaded {len(self.test_set)} test scenes')
@@ -312,21 +317,25 @@ class Trainer:
             self.train_set = self.dataset(scene_list=self.train_scenes, features_path=self.args.features_path, 
                                           boxes_path=self.args.boxes_path, normalize_density=self.args.normalize_density,
                                           flip_prob=self.args.flip_prob, rotate_prob=self.args.rotate_prob, 
-                                          rot_scale_prob=self.args.rot_scale_prob, preload=self.args.preload)
+                                          rot_scale_prob=self.args.rot_scale_prob, preload=self.args.preload,
+                                          from_nerfstudio=self.args.from_nerfstudio)
             self.val_set = self.dataset(scene_list=self.val_scenes, features_path=self.args.features_path, 
                                         boxes_path=self.args.boxes_path, normalize_density=self.args.normalize_density,
-                                        preload=self.args.preload)
+                                        preload=self.args.preload, from_nerfstudio=self.args.from_nerfstudio)
 
         elif self.args.dataset_name == 'scannet':
             self.train_set = ScanNetRPNDataset(scene_list=self.train_scenes, features_path=self.args.features_path,
                                                boxes_path=self.args.boxes_path, flip_prob=self.args.flip_prob,
-                                               rotate_prob=self.args.rotate_prob, rot_scale_prob=self.args.rot_scale_prob)
+                                               rotate_prob=self.args.rotate_prob, rot_scale_prob=self.args.rot_scale_prob,
+                                               from_nerfstudio=self.args.from_nerfstudio)
             self.val_set = ScanNetRPNDataset(scene_list=self.val_scenes, features_path=self.args.features_path,
-                                             boxes_path=self.args.boxes_path)
+                                             boxes_path=self.args.boxes_path, from_nerfstudio=self.args.from_nerfstudio)
 
         elif self.args.dataset_name == 'general':
-            self.train_set = GeneralRPNDataset(csv_path=self.args.train_csv, normalize_density=self.args.normalize_density)
-            self.val_set = GeneralRPNDataset(csv_path=self.args.val_csv, normalize_density=self.args.normalize_density)
+            self.train_set = GeneralRPNDataset(csv_path=self.args.train_csv, normalize_density=self.args.normalize_density, 
+                                               from_nerfstudio=self.args.from_nerfstudio)
+            self.val_set = GeneralRPNDataset(csv_path=self.args.val_csv, normalize_density=self.args.normalize_density, 
+                                             from_nerfstudio=self.args.from_nerfstudio)
 
         if self.world_size == 1:
             self.train_loader = DataLoader(self.train_set, batch_size=self.args.batch_size, 
@@ -566,7 +575,7 @@ class Trainer:
 
         APs.append(ap50['ap'].item())
 
-        print(f'AP@50: AP: {ap50["ap"].item():.4f}')
+        print(f'\nAP@50: AP: {ap50["ap"].item():.4f}')
         print(f'AP@25: AP: {ap25["ap"].item():.4f}')
 
         json_dict['ap_50'] = ap50

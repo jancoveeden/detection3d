@@ -4,6 +4,8 @@
 
 The code and docs for training NeRF from Hypersim scenes and subsequent feature extraction are available in our instant-ngp [fork](https://github.com/zymk9/instant-ngp/tree/master/scripts).
 
+Check semantic classes [here](https://github.com/apple/ml-hypersim/issues/12)
+
 Example of use:
 ```bash
 python preprocess_boxes.py \

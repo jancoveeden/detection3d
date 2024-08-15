@@ -21,7 +21,7 @@ from model.feature_extractor import Bottleneck, ResNet_FPN_256, ResNet_FPN_64
 from model.feature_extractor import VGG_FPN, SwinTransformer_FPN
 from model.utils import box_iou_3d, print_shape
 from datasets import HypersimRPNDataset, Front3DRPNDataset, GeneralRPNDataset, ScanNetRPNDataset
-from eval import evaluate_box_proposals_ap, evaluate_box_proposals_recall
+from utils.eval import evaluate_box_proposals_ap, evaluate_box_proposals_recall
 
 from tqdm import tqdm
 import wandb
@@ -60,7 +60,7 @@ def parse_args():
                         help='Whether to output proposals during evaluation.')
     parser.add_argument('--save_level_index', action='store_true',
                         help='Whether to save level indices')
-    parser.add_argument('--filter', choices=['none', 'tp', 'fp'], default='none', 
+    parser.add_argument('--filter', choices=['None', 'tp', 'fp'], default='None', 
                         help='Filter the proposal output for visualization and debugging.')
     parser.add_argument('--filter_threshold', type=float, default=0.7,
                         help='The IoU threshold for the proposal filter, only used if --output_proposals is True '
@@ -127,7 +127,10 @@ def parse_args():
 
     parser.add_argument('--output_all', action='store_true',
                         help='Output proposals of all sets in evaluation.')
-
+    
+    # Nerfstudio add-ons
+    parser.add_argument('--from_nerfstudio', default=False, action='store_true', 
+                        help='Whether nerfstudio was used to extract the features or not.')
 
     args = parser.parse_args()
     return args
@@ -232,15 +235,19 @@ class Trainer:
             if self.args.dataset == 'hypersim':
                 self.test_set = HypersimRPNDataset(self.args.features_path, self.args.boxes_path,
                                                    normalize_density=self.args.normalize_density,
-                                                   scene_list=self.test_scenes, preload=self.args.preload)
+                                                   scene_list=self.test_scenes, preload=self.args.preload,
+                                                   from_nerfstudio=self.args.from_nerfstudio)
             elif self.args.dataset == 'front3d':
                 self.test_set = Front3DRPNDataset(self.args.features_path, self.args.boxes_path,
                                                   normalize_density=self.args.normalize_density,
-                                                  scene_list=self.test_scenes, preload=self.args.preload)
+                                                  scene_list=self.test_scenes, preload=self.args.preload,
+                                                  from_nerfstudio=self.args.from_nerfstudio)
             elif self.args.dataset == 'scannet':
-                self.test_set = ScanNetRPNDataset(self.test_scenes, self.args.features_path, self.args.boxes_path)
+                self.test_set = ScanNetRPNDataset(self.test_scenes, self.args.features_path, self.args.boxes_path, 
+                                                  from_nerfstudio=self.args.from_nerfstudio)
             else:
-                self.test_set = GeneralRPNDataset(self.args.test_csv, self.args.normalize_density)
+                self.test_set = GeneralRPNDataset(self.args.test_csv, self.args.normalize_density, 
+                                                  from_nerfstudio=self.args.from_nerfstudio)
 
             if self.rank == 0:
                 self.logger.info(f'Loaded {len(self.test_set)} scenes for evaluation')
@@ -271,29 +278,36 @@ class Trainer:
 
     def train_loop(self):
         if self.args.dataset == 'hypersim':
-            self.train_set = HypersimRPNDataset(self.args.features_path, self.args.boxes_path, scene_list=self.train_scenes,
+            self.train_set = HypersimRPNDataset(self.args.features_path, self.args.boxes_path, 
+                                                scene_list=self.train_scenes,
                                                 normalize_density=self.args.normalize_density,
                                                 flip_prob=self.args.flip_prob, rotate_prob=self.args.rotate_prob,
-                                                rot_scale_prob=self.args.rot_scale_prob, preload=self.args.preload)
+                                                rot_scale_prob=self.args.rot_scale_prob, preload=self.args.preload,
+                                                from_nerfstudio=self.args.from_nerfstudio)
 
             if self.rank == 0:
                 self.val_set = HypersimRPNDataset(self.args.features_path, self.args.boxes_path, scene_list=self.val_scenes, 
-                                                  normalize_density=self.args.normalize_density, preload=self.args.preload)
+                                                  normalize_density=self.args.normalize_density, preload=self.args.preload, 
+                                                  from_nerfstudio=self.args.from_nerfstudio)
         elif self.args.dataset == 'front3d':
             self.train_set = Front3DRPNDataset(self.args.features_path, self.args.boxes_path, scene_list=self.train_scenes, 
                                                normalize_density=self.args.normalize_density,
                                                flip_prob=self.args.flip_prob, rotate_prob=self.args.rotate_prob,
-                                               rot_scale_prob=self.args.rot_scale_prob, preload=self.args.preload)
+                                               rot_scale_prob=self.args.rot_scale_prob, preload=self.args.preload, 
+                                               from_nerfstudio=self.args.from_nerfstudio)
 
             if self.rank == 0:
                 self.val_set = Front3DRPNDataset(self.args.features_path, self.args.boxes_path, scene_list=self.val_scenes,
-                                                 normalize_density=self.args.normalize_density, preload=self.args.preload)
+                                                 normalize_density=self.args.normalize_density, preload=self.args.preload, 
+                                                 from_nerfstudio=self.args.from_nerfstudio)
         elif self.args.dataset == 'scannet':
             self.train_set = ScanNetRPNDataset(self.train_scenes, self.args.features_path, self.args.boxes_path,
                                                flip_prob=self.args.flip_prob, rotate_prob=self.args.rotate_prob,
-                                               rot_scale_prob=self.args.rot_scale_prob)
+                                               rot_scale_prob=self.args.rot_scale_prob, 
+                                               from_nerfstudio=self.args.from_nerfstudio)
             if self.rank == 0:
-                self.val_set = ScanNetRPNDataset(self.val_scenes, self.args.features_path, self.args.boxes_path)
+                self.val_set = ScanNetRPNDataset(self.val_scenes, self.args.features_path, self.args.boxes_path, 
+                                                 from_nerfstudio=self.args.from_nerfstudio)
 
         collate_fn = self.train_set.collate_fn
 

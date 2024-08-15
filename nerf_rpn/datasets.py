@@ -21,7 +21,8 @@ class BaseDataset(torch.utils.data.Dataset, ABC):
         flip_prob: float = 0.0,
         rotate_prob: float = 0.0,
         rot_scale_prob: float = 0.0,
-        z_up: bool = True
+        z_up: bool = True,
+        from_nerfstudio: bool = False,
     ) -> None:
         super().__init__()
         self.dataset_type = dataset_type # hypersim, 3dfront, general
@@ -33,6 +34,7 @@ class BaseDataset(torch.utils.data.Dataset, ABC):
         self.rotate_prob = rotate_prob  # the probability of rotating the data by 90 degrees
         self.rot_scale_prob = rot_scale_prob  # the probability of extra rotation and scaling
         self.z_up = z_up    # whether the boxes are z-up
+        self.from_nerfstudio = from_nerfstudio
 
         self.scene_data = []
 
@@ -50,12 +52,23 @@ class BaseDataset(torch.utils.data.Dataset, ABC):
             rgbsigma = features['rgbsigma']
             if self.normalize_density:
                 alpha = self.density_to_alpha(rgbsigma[..., -1])
-                rgbsigma[..., -1] = alpha
+                rgbsigma[..., -1] = alpha  # Assuming (W, L, H, 4)
 
-            # From (W, L, H, C) to (C, W, L, H)
-            rgbsigma = np.transpose(rgbsigma, (3, 0, 1, 2))
+            if (self.from_nerfstudio):
+                res = features['resolution']
+                rgbsigma = rgbsigma.reshape(4, res[0], res[1], res[2]) # (4, W, L, H)
+                #rgbsigma = np.transpose(rgbsigma, (3, 2, 1, 0)) # 2, 1, 0, 3
+                #rgbsigma = np.transpose(rgbsigma, (0, 2, 1, 3))
+
+                # res = features['resolution']
+                # rgbsigma = rgbsigma.reshape(4, res[0], res[1], res[2])                 # (4, W, L, H)
+                # rgbsigma = np.transpose(rgbsigma, (3, 2, 1, 0)).reshape(-1, 4)         # (W, L, H, 4)
+                # rgbsigma = rgbsigma.reshape(4, res[0], res[1], res[2])
+            else:
+                # From (W, L, H, C) to (C, W, L, H)
+                rgbsigma = np.transpose(rgbsigma, (3, 0, 1, 2))
+
             rgbsigma = torch.from_numpy(rgbsigma)
-
             if rgbsigma.dtype == torch.uint8:
                 # normalize rgbsigma to [0, 1]
                 rgbsigma = rgbsigma.float() / 255.0
@@ -186,9 +199,10 @@ class Front3DRPNDataset(BaseDataset):
                  flip_prob: float = 0.0,
                  rotate_prob: float = 0.0,
                  rot_scale_prob: float = 0.0,
-                 preload: bool = False):
+                 preload: bool = False,
+                 from_nerfstudio: bool = False):
         super().__init__('3dfront', features_path, boxes_path, scene_list, normalize_density, 
-                         flip_prob, rotate_prob, rot_scale_prob)
+                         flip_prob, rotate_prob, rot_scale_prob,  True, from_nerfstudio)
         self.load_scene_data(preload=preload)
 
 
@@ -199,9 +213,11 @@ class HypersimRPNDataset(BaseDataset):
                  flip_prob: float = 0.0,
                  rotate_prob: float = 0.0,
                  rot_scale_prob: float = 0.0,
-                 preload: bool = False):
+                 preload: bool = False,
+                 from_nerfstudio: bool = False):
         super().__init__('hypersim', features_path, boxes_path, scene_list, 
-                         normalize_density, flip_prob, rotate_prob, rot_scale_prob)
+                         normalize_density, flip_prob, rotate_prob, rot_scale_prob,
+                         True, from_nerfstudio)
         self.load_scene_data(preload=preload)
 
 
@@ -210,10 +226,12 @@ class ScanNetRPNDataset(BaseDataset):
                  features_path: str, boxes_path: str, 
                  flip_prob: float = 0.0,
                  rotate_prob: float = 0.0,
-                 rot_scale_prob: float = 0.0):
+                 rot_scale_prob: float = 0.0,
+                 from_nerfstudio: bool = False):
         # ScanNet NeRF features are z-up already
         super().__init__('hypersim', features_path, boxes_path, scene_list, 
-                         False, flip_prob, rotate_prob, rot_scale_prob, z_up=True)
+                         False, flip_prob, rotate_prob, rot_scale_prob, True, 
+                         from_nerfstudio)
 
         self.load_scene_data(preload=True)
 
@@ -257,10 +275,16 @@ class GeneralRPNDataset(BaseDataset):
                     alpha = self.density_to_alpha(rgbsigma[..., -1])
                     rgbsigma[..., -1] = alpha
 
-                # From (W, L, H, C) to (C, W, L, H)
-                rgbsigma = np.transpose(rgbsigma, (3, 0, 1, 2))
+                if (self.from_nerfstudio):
+                    res = features['resolution']
+                    rgbsigma = rgbsigma.reshape(4, res[0], res[1], res[2])                 # (4, W, L, H)
+                    #rgbsigma = np.transpose(rgbsigma, (3, 2, 1, 0)).reshape(-1, 4)         # (W, L, H, 4)
+                    #rgbsigma = rgbsigma.reshape(4, res[0], res[1], res[2])
+                else:
+                    # From (W, L, H, C) to (C, W, L, H)
+                    rgbsigma = np.transpose(rgbsigma, (3, 0, 1, 2))
+            
                 rgbsigma = torch.from_numpy(rgbsigma)
-
                 if rgbsigma.dtype == torch.uint8:
                     rgbsigma = rgbsigma.float() / 255.0
 
